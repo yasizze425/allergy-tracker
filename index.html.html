@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Allergy Tracker</title>
+
+<!-- iOS home-screen install -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Allergy">
+
+<!-- Android / general -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f1117">
+
+<!-- Icon: three dots (item / reaction / pollen) on dark bg -->
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%230f1117'/><circle cx='55' cy='90' r='22' fill='%23e8854a'/><circle cx='125' cy='60' r='18' fill='%23c0392b'/><circle cx='125' cy='120' r='18' fill='%234a7a3a'/></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%230f1117'/><circle cx='55' cy='90' r='22' fill='%23e8854a'/><circle cx='125' cy='60' r='18' fill='%23c0392b'/><circle cx='125' cy='120' r='18' fill='%234a7a3a'/></svg>">
+
+<!-- Inline manifest (Android/Chrome PWA) -->
+<link rel="manifest" href='data:application/manifest+json;charset=utf-8,{"name":"Allergy Tracker","short_name":"Allergy","start_url":".","display":"standalone","background_color":"%230f1117","theme_color":"%230f1117","orientation":"portrait","icons":[{"src":"data:image/svg+xml;utf8,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 180 180%27><rect width=%27180%27 height=%27180%27 rx=%2740%27 fill=%27%230f1117%27/><circle cx=%2755%27 cy=%2790%27 r=%2722%27 fill=%27%23e8854a%27/><circle cx=%27125%27 cy=%2760%27 r=%2718%27 fill=%27%23c0392b%27/><circle cx=%27125%27 cy=%27120%27 r=%2718%27 fill=%27%234a7a3a%27/></svg>","sizes":"any","type":"image/svg+xml"}]}'>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<style>
+  html, body, #root {
+    margin: 0;
+    padding: 0;
+    background: #0f1117;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    overscroll-behavior-y: contain;
+  }
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /* Splash while Babel transpiles */
+  #boot {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #e8854a; font-family: "DM Mono", "Courier New", monospace;
+    font-size: 11px; letter-spacing: 3px;
+  }
+</style>
+</head>
+<body>
+<div id="root"><div id="boot">LOADING</div></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+/* ============================================================
+   Tracker source below — byte-identical to AllergyTracker.jsx.
+   The two boundary changes (import → const above; export default
+   function → function) are required for in-browser execution.
+   ============================================================ */
+
+const CATEGORIES = ["Food","Medication","Topical","Environmental","Other"];
+const REACTIONS = ["Mild itching","Rash","Hives","Swelling","Throat tightness","Nausea","Gas","Cramps","Vomiting","Headache","Dizziness","Shortness of breath","Other"];
+const POLLEN_LEVELS = ["Low","Moderate","High","Very High"];
+const POLLEN_TYPES = ["Tree","Grass","Weed","Mold"];
+const FONT = "DM Mono, Courier New, monospace";
+
+const C = {
+  bg:"#0f1117", card:"#1a1f2e", input:"#0f1117",
+  border:"#2a2f3f", borderLt:"#1e2330",
+  accent:"#e8854a", accentBg:"#3a1a0f",
+  text:"#f0ede8", muted:"#888", dim:"#444",
+  green:"#2a6e3f", chip:"#252b3b", chipBd:"#3a3f50",
+  red:"#c0392b", redBg:"#2a0a0a",
+  pol:"#4a7a3a", polBg:"#1a2e14",
+  med:"#3a6ea8", medBg:"#0f1e2e",
+};
+
+const TAB_COLOR = { item:C.accent, reaction:C.red, pollen:C.pol };
+
+const pad = (n) => String(n).padStart(2,"0");
+function getNow() {
+  const d = new Date();
+  return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
+}
+function fmt(iso) {
+  if (!iso) return "";
+  try { return new Date(iso).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}); }
+  catch { return iso; }
+}
+function safeArr(v) { return Array.isArray(v) ? v : []; }
+function safeStr(v) { return typeof v === "string" ? v : ""; }
+
+function makeCSV(entries) {
+  const hdr = ["Time","Type","Category","Item","Reactions","Pollen Level","Pollen Types","Notes"];
+  const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g,'""') + '"';
+  const rows = entries.map((e) => [
+    fmt(e.time), safeStr(e.type), safeStr(e.category), safeStr(e.thing),
+    safeArr(e.reactions).join("; "), safeStr(e.pollenLevel),
+    safeArr(e.pollenTypes).join("; "), safeStr(e.notes),
+  ]);
+  return [hdr,...rows].map((r)=>r.map(esc).join(",")).join("\n");
+}
+
+function loadJ(key, fb) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch { return fb; }
+}
+function saveJ(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+
+function Chip({ label, active, color, onClick }) {
+  const c = color || C.accent;
+  const isOrange = c === C.accent;
+  return (
+    <button onClick={onClick} style={{
+      background: active ? c : C.chip,
+      color: active ? (isOrange ? "#0f1117" : "#fff") : C.muted,
+      border: "1px solid " + (active ? c : C.chipBd),
+      borderRadius:"7px", padding:"6px 11px", fontSize:"13px",
+      cursor:"pointer", fontFamily:FONT, fontWeight: active ? "700" : "400",
+    }}>{label}</button>
+  );
+}
+
+function Lbl({ t }) {
+  return <div style={{fontSize:"10px",color:C.muted,letterSpacing:"1.5px",marginBottom:"6px"}}>{t}</div>;
+}
+
+function inputStyle(extra) {
+  return Object.assign({
+    width:"100%", background:C.input, border:"1px solid "+C.border,
+    borderRadius:"8px", padding:"11px 12px", color:C.text,
+    fontSize:"14px", fontFamily:FONT, boxSizing:"border-box",
+  }, extra || {});
+}
+
+function TimeRow({ value, onChange }) {
+  return (
+    <div style={{marginBottom:"13px"}}>
+      <Lbl t="TIME" />
+      <div style={{display:"flex",gap:"8px"}}>
+        <input type="datetime-local" value={value} onChange={(e)=>onChange(e.target.value)}
+          style={Object.assign(inputStyle(), {flex:1,colorScheme:"dark"})} />
+        <button onClick={()=>onChange(getNow())} style={{
+          background:C.chip, color:C.muted, border:"1px solid "+C.border,
+          borderRadius:"8px", padding:"0 12px", fontSize:"11px",
+          cursor:"pointer", fontFamily:FONT, whiteSpace:"nowrap",
+        }}>Now</button>
+      </div>
+    </div>
+  );
+}
+
+function ItemBank({ category, banks, onBanksChange, selected, onSelectedChange }) {
+  const [newItem, setNewItem] = useState("");
+  const items = safeArr(banks[category]);
+  const catColor = category === "Medication" ? C.med : C.accent;
+  const isOrange = catColor === C.accent;
+
+  function addItem() {
+    const name = newItem.trim();
+    if (!name) return;
+    if (!items.includes(name)) {
+      onBanksChange(Object.assign({}, banks, { [category]: [name, ...items] }));
+    }
+    if (!selected.includes(name)) onSelectedChange([...selected, name]);
+    setNewItem("");
+  }
+
+  function removeFromBank(name) {
+    onBanksChange(Object.assign({}, banks, { [category]: items.filter((i)=>i!==name) }));
+    onSelectedChange(selected.filter((s)=>s!==name));
+  }
+
+  function toggleSelect(name) {
+    onSelectedChange(selected.includes(name) ? selected.filter((s)=>s!==name) : [...selected, name]);
+  }
+
+  return (
+    <div style={{marginBottom:"13px"}}>
+      <Lbl t={category.toUpperCase() + " — TAP TO SELECT"} />
+      {items.length > 0 && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:"6px",marginBottom:"10px"}}>
+          {items.map((item) => (
+            <div key={item} style={{display:"flex"}}>
+              <button onClick={()=>toggleSelect(item)} style={{
+                background: selected.includes(item) ? catColor : C.chip,
+                color: selected.includes(item) ? (isOrange ? "#0f1117" : "#fff") : C.muted,
+                border: "1px solid " + (selected.includes(item) ? catColor : C.chipBd),
+                borderRight:"none", borderRadius:"7px 0 0 7px",
+                padding:"7px 12px", fontSize:"13px", cursor:"pointer", fontFamily:FONT,
+                fontWeight: selected.includes(item) ? "700" : "400",
+              }}>{selected.includes(item) ? "✓ " : ""}{item}</button>
+              <button onClick={()=>removeFromBank(item)} style={{
+                background:C.chip, color:C.dim,
+                border:"1px solid "+C.chipBd, borderLeft:"none",
+                borderRadius:"0 7px 7px 0", padding:"7px 8px",
+                fontSize:"10px", cursor:"pointer", fontFamily:FONT,
+              }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{display:"flex",gap:"8px"}}>
+        <input type="text" placeholder={"Add to " + category + " list…"}
+          value={newItem} onChange={(e)=>setNewItem(e.target.value)}
+          onKeyDown={(e)=>{ if(e.key==="Enter") addItem(); }}
+          style={Object.assign(inputStyle({fontSize:"14px",padding:"10px 12px"}), {flex:1})} />
+        <button onClick={addItem} style={{
+          background:catColor, color: isOrange ? "#0f1117" : "#fff",
+          border:"none", borderRadius:"8px",
+          padding:"0 14px", fontSize:"13px", cursor:"pointer", fontFamily:FONT, whiteSpace:"nowrap",
+        }}>+ Add</button>
+      </div>
+      {selected.length > 0 && (
+        <div style={{fontSize:"11px",color:C.muted,marginTop:"7px"}}>
+          {selected.length} selected → {selected.length} individual {selected.length > 1 ? "entries" : "entry"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AllergyTracker() {
+  const [entries,  setEntries]  = useState(()=>loadJ("at6_entries",[]));
+  const [banks,    setBanks]    = useState(()=>loadJ("at6_banks",{}));
+  const [tab,      setTab]      = useState("item");
+
+  const [iTime,     setITime]     = useState(getNow());
+  const [iCat,      setICat]      = useState("Food");
+  const [iSelected, setISelected] = useState([]);
+  const [iNotes,    setINotes]    = useState("");
+  const [iSaved,    setISaved]    = useState(false);
+
+  const [rTime,     setRTime]     = useState(getNow());
+  const [rSelected, setRSelected] = useState([]);
+  const [rNotes,    setRNotes]    = useState("");
+  const [rSaved,    setRSaved]    = useState(false);
+
+  const [pTime,     setPTime]     = useState(getNow());
+  const [pLevel,    setPLevel]    = useState("Moderate");
+  const [pTypes,    setPTypes]    = useState([]);
+  const [pNotes,    setPNotes]    = useState("");
+  const [pSaved,    setPSaved]    = useState(false);
+  const [pFetch,    setPFetch]    = useState(false);
+  const [pResult,   setPResult]   = useState(null);
+  const [pRaw,      setPRaw]      = useState(null);
+
+  const [filter,     setFilter]     = useState("");
+  const [showExport, setShowExport] = useState(false);
+  const [copied,     setCopied]     = useState(false);
+
+  useEffect(()=>saveJ("at6_entries",entries),[entries]);
+  useEffect(()=>saveJ("at6_banks",banks),[banks]);
+
+  function logItems() {
+    if (iSelected.length === 0) return;
+    const now = iTime;
+    const newEntries = iSelected.map((thing) => ({
+      id: Date.now() + Math.random(),
+      type:"item", time:now, category:iCat, thing:thing, reactions:[], notes:iNotes,
+    }));
+    setEntries((prev) => [...newEntries, ...prev]);
+    setISelected([]); setINotes(""); setITime(getNow());
+    setISaved(true); setTimeout(()=>setISaved(false), 1800);
+  }
+
+  function logReaction() {
+    if (rSelected.length === 0) return;
+    setEntries((prev) => [{
+      id:Date.now(), type:"reaction", time:rTime,
+      category:"", thing:"", reactions:rSelected, notes:rNotes,
+    }, ...prev]);
+    setRSelected([]); setRNotes(""); setRTime(getNow());
+    setRSaved(true); setTimeout(()=>setRSaved(false), 1800);
+  }
+
+  function logPollen() {
+    setEntries((prev) => [{
+      id:Date.now(), type:"pollen", time:pTime,
+      category:"", thing:"", reactions:[],
+      pollenLevel:pLevel, pollenTypes:pTypes, notes:pNotes,
+    }, ...prev]);
+    setPTypes([]); setPNotes(""); setPTime(getNow());
+    setPResult(null); setPRaw(null);
+    setPSaved(true); setTimeout(()=>setPSaved(false), 1800);
+  }
+
+  async function fetchPollen() {
+    setPFetch(true); setPResult(null); setPRaw(null);
+    try {
+      const pos = await new Promise((res,rej) =>
+        navigator.geolocation.getCurrentPosition(res, rej, {timeout:8000})
+      );
+      const lat = pos.coords.latitude.toFixed(4);
+      const lon = pos.coords.longitude.toFixed(4);
+      const url = "https://air-quality-api.open-meteo.com/v1/air-quality?latitude="+lat+"&longitude="+lon+"&hourly=birch_pollen,alder_pollen,grass_pollen,ragweed_pollen,mugwort_pollen&timeformat=unixtime&timezone=auto";
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error("API " + resp.status);
+      const data = await resp.json();
+      const now = Date.now();
+      let idx = 0, best = Infinity;
+      data.hourly.time.forEach((t,i) => { const d=Math.abs(t*1000-now); if(d<best){best=d;idx=i;} });
+      const h = data.hourly;
+      const tree  = Math.max(h.birch_pollen  ? h.birch_pollen[idx]  : 0, h.alder_pollen   ? h.alder_pollen[idx]   : 0);
+      const grass = h.grass_pollen   ? h.grass_pollen[idx]   : 0;
+      const weed  = Math.max(h.ragweed_pollen ? h.ragweed_pollen[idx] : 0, h.mugwort_pollen ? h.mugwort_pollen[idx] : 0);
+      const maxVal = Math.max(tree, grass, weed);
+      const level = maxVal <= 0 ? "Low" : maxVal < 10 ? "Low" : maxVal < 50 ? "Moderate" : maxVal < 200 ? "High" : "Very High";
+      const types = (tree>0?["Tree"]:[]).concat(grass>0?["Grass"]:[]).concat(weed>0?["Weed"]:[]);
+      setPLevel(level); setPTypes(types); setPTime(getNow());
+      setPNotes("Auto. Tree:"+tree.toFixed(1)+" Grass:"+grass.toFixed(1)+" Weed:"+weed.toFixed(1)+" g/m3");
+      setPRaw({tree,grass,weed});
+      setPResult(types.length > 0 ? "ok" : "no-data");
+    } catch(err) {
+      setPResult("error");
+    } finally {
+      setPFetch(false);
+    }
+  }
+
+  function copyCSV() {
+    try {
+      const csv = makeCSV(entries);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(csv).then(() => { setCopied(true); setTimeout(()=>setCopied(false),2500); });
+      } else {
+        const ta = document.getElementById("csv-ta");
+        if (ta) { ta.select(); document.execCommand("copy"); setCopied(true); setTimeout(()=>setCopied(false),2500); }
+      }
+    } catch(err) { alert("Copy failed: " + err.message); }
+  }
+
+  function deleteEntry(id) { setEntries((prev)=>prev.filter((e)=>e.id!==id)); }
+
+  function toggleR(r) {
+    setRSelected((prev) => prev.includes(r) ? prev.filter((x)=>x!==r) : [...prev, r]);
+  }
+  function togglePT(t) {
+    setPTypes((prev) => prev.includes(t) ? prev.filter((x)=>x!==t) : [...prev, t]);
+  }
+
+  const shown = entries.filter((e) => {
+    if (!filter) return true;
+    const q = filter.toLowerCase();
+    return [safeStr(e.thing), safeStr(e.category), safeStr(e.notes), safeStr(e.pollenLevel)]
+      .concat(safeArr(e.reactions)).concat(safeArr(e.pollenTypes))
+      .some((f) => f.toLowerCase().includes(q));
+  });
+
+  const rxCount = entries.filter((e)=>e.type==="reaction").length;
+
+  return (
+    <div style={{fontFamily:FONT, background:C.bg, minHeight:"100vh", color:C.text, position:"relative"}}>
+
+      <div style={{background:"linear-gradient(135deg,"+C.card+","+C.bg+")", borderBottom:"1px solid "+C.border, padding:"16px 16px 12px", position:"sticky", top:0, zIndex:10}}>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:"10px", color:C.accent, letterSpacing:"3px", marginBottom:"2px"}}>REACTION LOG</div>
+            <div style={{fontSize:"20px", fontWeight:"700", letterSpacing:"-0.5px"}}>Allergy Tracker</div>
+          </div>
+          <div style={{display:"flex", gap:"7px", alignItems:"center"}}>
+            {rxCount > 0 && (
+              <div style={{background:C.redBg, color:C.red, border:"1px solid "+C.red+"44", borderRadius:"20px", padding:"3px 10px", fontSize:"11px"}}>
+                {"⚠ "+rxCount}
+              </div>
+            )}
+            <div style={{background:C.accent, color:C.bg, borderRadius:"20px", padding:"3px 10px", fontSize:"11px", fontWeight:"700"}}>
+              {entries.length}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{padding:"12px 12px 100px"}}>
+
+        <div style={{display:"flex", borderRadius:"10px", overflow:"hidden", border:"1px solid "+C.border, marginBottom:"12px"}}>
+          {[["item","📋 Item"],["reaction","⚠️ Reaction"],["pollen","🌿 Pollen"]].map(function(pair) {
+            const v = pair[0], l = pair[1];
+            const tc = TAB_COLOR[v];
+            const isActive = tab === v;
+            return (
+              <button key={v} onClick={()=>setTab(v)} style={{
+                flex:1, background: isActive ? tc : C.chip,
+                color: isActive ? (v==="item" ? "#0f1117" : "#fff") : C.muted,
+                border:"none", padding:"11px 4px", fontSize:"12px",
+                fontWeight:"700", cursor:"pointer", fontFamily:FONT,
+              }}>{l}</button>
+            );
+          })}
+        </div>
+
+        {tab==="item" && (
+          <div style={{background:C.card, borderRadius:"14px", border:"1px solid "+C.border, padding:"14px", marginBottom:"12px"}}>
+            <TimeRow value={iTime} onChange={setITime} />
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="CATEGORY" />
+              <div style={{display:"flex", flexWrap:"wrap", gap:"6px"}}>
+                {CATEGORIES.map((c) => (
+                  <Chip key={c} label={c} active={iCat===c}
+                    color={c==="Medication" ? C.med : C.accent}
+                    onClick={()=>{ setICat(c); setISelected([]); }} />
+                ))}
+              </div>
+            </div>
+            <ItemBank
+              category={iCat} banks={banks} onBanksChange={setBanks}
+              selected={iSelected} onSelectedChange={setISelected}
+            />
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="NOTES" />
+              <textarea placeholder="brand, quantity, location…" value={iNotes}
+                onChange={(e)=>setINotes(e.target.value)}
+                rows={2} style={inputStyle({resize:"vertical"})} />
+            </div>
+            <button onClick={logItems} style={{
+              width:"100%",
+              background: iSaved ? C.green : (iCat==="Medication" ? C.med : C.accent),
+              color: iSaved ? "#fff" : "#0f1117",
+              border:"none", borderRadius:"10px", padding:"14px",
+              fontSize:"14px", fontWeight:"700", fontFamily:FONT,
+              cursor:"pointer", letterSpacing:"1px",
+              opacity: iSelected.length === 0 ? 0.4 : 1,
+            }}>
+              {iSaved ? "✓ LOGGED" : iSelected.length > 0 ? ("+ LOG "+iSelected.length+" ITEM"+(iSelected.length>1?"S":"")) : "+ SELECT ITEMS"}
+            </button>
+          </div>
+        )}
+
+        {tab==="reaction" && (
+          <div style={{background:C.card, borderRadius:"14px", border:"1px solid "+C.border, padding:"14px", marginBottom:"12px"}}>
+            <TimeRow value={rTime} onChange={setRTime} />
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="REACTIONS — SELECT ALL THAT APPLY" />
+              <div style={{display:"flex", flexWrap:"wrap", gap:"6px"}}>
+                {REACTIONS.map((r) => (
+                  <Chip key={r} label={r} active={rSelected.includes(r)} color={C.red}
+                    onClick={()=>toggleR(r)} />
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="NOTES" />
+              <textarea placeholder="severity, context…" value={rNotes}
+                onChange={(e)=>setRNotes(e.target.value)}
+                rows={2} style={inputStyle({resize:"vertical"})} />
+            </div>
+            <button onClick={logReaction} style={{
+              width:"100%",
+              background: rSaved ? C.green : C.red,
+              color:"#fff", border:"none", borderRadius:"10px", padding:"14px",
+              fontSize:"14px", fontWeight:"700", fontFamily:FONT,
+              cursor:"pointer", letterSpacing:"1px",
+              opacity: rSelected.length === 0 ? 0.4 : 1,
+            }}>
+              {rSaved ? "✓ LOGGED" : rSelected.length > 0 ? ("⚠ LOG "+rSelected.length+" REACTION"+(rSelected.length>1?"S":"")) : "⚠ SELECT REACTIONS"}
+            </button>
+          </div>
+        )}
+
+        {tab==="pollen" && (
+          <div style={{background:C.card, borderRadius:"14px", border:"1px solid "+C.border, padding:"14px", marginBottom:"12px"}}>
+            <button onClick={fetchPollen} disabled={pFetch} style={{
+              width:"100%", marginBottom:"14px",
+              background: pResult==="ok" ? C.green : pResult==="error" ? "#5a1a1a" : C.pol,
+              color:"#fff", border:"none", borderRadius:"10px", padding:"13px",
+              fontSize:"13px", fontWeight:"700", fontFamily:FONT,
+              cursor:"pointer", opacity: pFetch ? 0.6 : 1,
+            }}>
+              {pFetch ? "📡 Fetching…" : pResult==="ok" ? "✓ Loaded — edit below if needed" : pResult==="error" ? "⚠ Failed — fill manually" : pResult==="no-data" ? "⚠ No data — set manually" : "📡 Fetch current pollen"}
+            </button>
+            {pRaw && (
+              <div style={{background:C.polBg, border:"1px solid "+C.pol+"44", borderRadius:"8px", padding:"8px 12px", marginBottom:"12px", fontSize:"11px", color:"#a8d89a"}}>
+                {"Tree:"+pRaw.tree.toFixed(1)+" · Grass:"+pRaw.grass.toFixed(1)+" · Weed:"+pRaw.weed.toFixed(1)+" g/m³"}
+              </div>
+            )}
+            <TimeRow value={pTime} onChange={setPTime} />
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="POLLEN LEVEL" />
+              <div style={{display:"flex", flexWrap:"wrap", gap:"6px"}}>
+                {POLLEN_LEVELS.map((l) => (
+                  <Chip key={l} label={l} active={pLevel===l} color={C.pol} onClick={()=>setPLevel(l)} />
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="POLLEN TYPES" />
+              <div style={{display:"flex", flexWrap:"wrap", gap:"6px"}}>
+                {POLLEN_TYPES.map((t) => (
+                  <Chip key={t} label={t} active={pTypes.includes(t)} color={C.pol} onClick={()=>togglePT(t)} />
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:"13px"}}>
+              <Lbl t="NOTES" />
+              <textarea placeholder="source, location…" value={pNotes}
+                onChange={(e)=>setPNotes(e.target.value)}
+                rows={2} style={inputStyle({resize:"vertical"})} />
+            </div>
+            <button onClick={logPollen} style={{
+              width:"100%",
+              background: pSaved ? C.green : C.pol,
+              color:"#fff", border:"none", borderRadius:"10px", padding:"14px",
+              fontSize:"14px", fontWeight:"700", fontFamily:FONT,
+              cursor:"pointer", letterSpacing:"1px",
+            }}>
+              {pSaved ? "✓ LOGGED" : "+ LOG POLLEN"}
+            </button>
+          </div>
+        )}
+
+        {entries.length > 0 && (
+          <div style={{background:C.card, borderRadius:"14px", border:"1px solid "+C.border, overflow:"hidden"}}>
+            <div style={{padding:"11px 14px", borderBottom:"1px solid "+C.border, display:"flex", justifyContent:"space-between", alignItems:"center", gap:"8px", flexWrap:"wrap"}}>
+              <div style={{fontSize:"10px", color:C.accent, letterSpacing:"2px"}}>{"LOG — "+shown.length}</div>
+              <div style={{display:"flex", gap:"8px"}}>
+                <input type="text" placeholder="Search…" value={filter}
+                  onChange={(e)=>setFilter(e.target.value)}
+                  style={{background:C.input, border:"1px solid "+C.border, borderRadius:"6px", padding:"6px 10px", color:C.text, fontSize:"12px", fontFamily:FONT, width:"90px"}} />
+                <button onClick={()=>setShowExport(true)} style={{
+                  background:C.chip, color:C.accent, border:"1px solid "+C.accent,
+                  borderRadius:"6px", padding:"6px 12px", fontSize:"11px",
+                  fontWeight:"700", cursor:"pointer", fontFamily:FONT,
+                }}>↓ CSV</button>
+              </div>
+            </div>
+
+            {shown.map((e, i) => {
+              const isRx  = e.type === "reaction";
+              const isPol = e.type === "pollen";
+              const isMed = !isRx && !isPol && e.category === "Medication";
+              const leftColor = isPol ? C.pol : isRx ? C.red : isMed ? C.med : "transparent";
+              return (
+                <div key={e.id} style={{
+                  padding:"11px 14px",
+                  borderBottom: i < shown.length-1 ? "1px solid "+C.borderLt : "none",
+                  borderLeft: "3px solid "+leftColor,
+                }}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:"8px"}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:"10px", color:C.dim, marginBottom:"3px"}}>
+                        {fmt(e.time)}
+                        {!isRx && !isPol && e.category && (
+                          <span style={{marginLeft:"8px", color:isMed?"#7ab3e8":C.muted, background:C.chip, borderRadius:"4px", padding:"1px 6px"}}>
+                            {isMed ? "💊 " : ""}{e.category}
+                          </span>
+                        )}
+                        {isRx && <span style={{marginLeft:"8px", color:C.red, background:C.redBg, borderRadius:"4px", padding:"1px 6px"}}>⚠ Reaction</span>}
+                        {isPol && <span style={{marginLeft:"8px", color:C.pol, background:C.polBg, borderRadius:"4px", padding:"1px 6px"}}>🌿 Pollen</span>}
+                      </div>
+                      {isPol && (
+                        <div style={{fontSize:"14px", fontWeight:"600", color:"#a8d89a"}}>
+                          {safeStr(e.pollenLevel)}{safeArr(e.pollenTypes).length > 0 ? " · "+e.pollenTypes.join(", ") : ""}
+                        </div>
+                      )}
+                      {isRx && (
+                        <div style={{display:"flex", flexWrap:"wrap", gap:"4px", marginTop:"2px"}}>
+                          {safeArr(e.reactions).map((r) => (
+                            <span key={r} style={{background:C.redBg, color:C.red, border:"1px solid "+C.red+"44", borderRadius:"5px", padding:"2px 8px", fontSize:"12px"}}>{r}</span>
+                          ))}
+                        </div>
+                      )}
+                      {!isRx && !isPol && (
+                        <div style={{fontSize:"15px", fontWeight:"600", color:C.text}}>{safeStr(e.thing)}</div>
+                      )}
+                      {safeStr(e.notes) && <div style={{fontSize:"12px", color:C.muted, marginTop:"3px"}}>{e.notes}</div>}
+                    </div>
+                    <button onClick={()=>deleteEntry(e.id)} style={{background:"none", color:C.dim, border:"none", fontSize:"15px", cursor:"pointer", padding:"0 0 0 6px", lineHeight:1}}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {entries.length === 0 && (
+          <div style={{textAlign:"center", color:C.dim, fontSize:"13px", padding:"40px 20px", border:"1px dashed "+C.border, borderRadius:"14px"}}>
+            No entries yet.<br/>Pick a tab above to start logging.
+          </div>
+        )}
+      </div>
+
+      {showExport && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", zIndex:50, display:"flex", alignItems:"flex-end"}}
+          onClick={()=>setShowExport(false)}>
+          <div style={{background:C.card, borderRadius:"16px 16px 0 0", border:"1px solid "+C.border,
+            padding:"20px 16px 36px", width:"100%", boxSizing:"border-box"}}
+            onClick={(e)=>e.stopPropagation()}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px"}}>
+              <div style={{fontSize:"13px", fontWeight:"700", color:C.accent, letterSpacing:"1px"}}>{"EXPORT — "+entries.length+" ENTRIES"}</div>
+              <button onClick={()=>setShowExport(false)} style={{background:"none", color:C.muted, border:"none", fontSize:"22px", cursor:"pointer", fontFamily:FONT, lineHeight:1}}>✕</button>
+            </div>
+            <div style={{fontSize:"12px", color:C.muted, marginBottom:"10px"}}>
+              Tap Copy, or press and hold → Select All → Copy.
+            </div>
+            <textarea id="csv-ta" readOnly value={makeCSV(entries)} rows={5}
+              style={{width:"100%", background:C.input, border:"1px solid "+C.border, borderRadius:"8px",
+                padding:"10px", color:C.muted, fontSize:"10px", fontFamily:"monospace", boxSizing:"border-box", resize:"none"}} />
+            <button onClick={copyCSV} style={{
+              marginTop:"12px", width:"100%",
+              background: copied ? C.green : C.accent,
+              color: copied ? "#fff" : "#0f1117",
+              border:"none", borderRadius:"10px", padding:"15px",
+              fontSize:"15px", fontWeight:"700", fontFamily:FONT, cursor:"pointer",
+            }}>
+              {copied ? "✓ Copied!" : "Copy to Clipboard"}
+            </button>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<AllergyTracker />);
+</script>
+</body>
+</html>
